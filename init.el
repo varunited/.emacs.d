@@ -2011,11 +2011,50 @@ Argument STATE is maintained by `use-package' as it processes symbols."
   :mode "\\.clj\\'"
   :ensure t)
 
+(defun cider-dime-var-info (f &rest args)
+  (or
+   ;; try DIME navigation
+   (ignore-errors
+     (let* ( ;; ----- deduce source var -----
+            ;; find the symbol at M-.
+            (sym-at-point (car args))
+            ;; find defn var name
+            (top-level-var (thread-first (cider-nrepl-sync-request:eval (cider-defun-at-point)
+                                                                        (cider-current-connection)
+                                                                        (cider-current-ns))
+                             (nrepl-dict-get  "value")
+                             (split-string "/")
+                             cadr))
+            ;; find source var symbol
+            (source-var-name
+             (when top-level-var
+               (thread-first (format "(dime.var/sym->source '%s '%s '%s)"
+                                     (cider-current-ns)
+                                     top-level-var
+                                     sym-at-point)
+                 (cider-nrepl-sync-request:eval)
+                 (nrepl-dict-get "value")))))
+       (when (and source-var-name
+                  (not (string-match-p "nil" source-var-name)))
+         ;; get var info of target fully-qualified var name
+         (let* ((source-var-pair (split-string source-var-name "/"))
+                (var-info (cider-nrepl-send-sync-request `("op" "info"
+                                                           "ns" ,(car source-var-pair)
+                                                           "symbol" ,(cadr source-var-pair)))))
+           (if (member "no-info" (nrepl-dict-get var-info "status"))
+               nil
+             var-info)))))
+   ;; else fallback on default behavior
+   (apply f args)))
+
 (use-package cider
   :ensure t
   :after (clojure-mode emacs-lisp-mode)
   :hook (clojure-mode . cider-mode)
+  :preface
+
   :config
+  (advice-add #'cider-var-info :around #'cider-dime-var-info)
   (setq nrepl-log-messages t
         cider-auto-jump-to-error nil
         cider-prompt-for-symbol nil
@@ -2760,7 +2799,15 @@ Argument STATE is maintained by `use-package' as it processes symbols."
 
 (setq mac-command-modifier 'control)
 
-(add-to-list 'exec-path "/usr/local/bin")
+(add-to-list 'exec-path "/usr/local/bin/")
+
+(setenv "PATH"
+        (concat
+         "/usr/local/bin;"
+         (getenv "PATH")
+         )
+        )
+(flyspell-mode 0)
 
 (beep 'init)
 ;;; init.el ends here
